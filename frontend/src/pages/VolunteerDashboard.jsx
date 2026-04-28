@@ -63,9 +63,16 @@ function MissionRouteMap({ volunteerLocation, incidentLocation }) {
           [volunteerLocation.lat, volunteerLocation.lng],
           [incidentLocation.lat, incidentLocation.lng],
         ]);
-        const dLat = incidentLocation.lat - volunteerLocation.lat;
-        const dLon = incidentLocation.lng - volunteerLocation.lng;
-        const dist = Math.sqrt(dLat * dLat + dLon * dLon) * 111;
+        // Use Haversine formula for accurate distance even in fallback
+        const R = 6371;
+        const dLat = (incidentLocation.lat - volunteerLocation.lat) * Math.PI / 180;
+        const dLon = (incidentLocation.lng - volunteerLocation.lng) * Math.PI / 180;
+        const a =
+          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(volunteerLocation.lat * Math.PI / 180) *
+          Math.cos(incidentLocation.lat * Math.PI / 180) *
+          Math.sin(dLon / 2) * Math.sin(dLon / 2);
+        const dist = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         setStats({ distance: dist.toFixed(1) + " km", duration: Math.ceil(dist * 3) + " min (est.)" });
         setRouteError(true);
       }
@@ -166,7 +173,8 @@ export default function VolunteerDashboard() {
     function merge() {
       const combined = [...acceptanceDocs, ...pendingDocs];
       combined.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      // For plain pending requests, only show those matched to this volunteer (if matchedVolunteers field exists)
+      // For plain pending requests, only show those matched to this volunteer (if matchedVolunteers field exists).
+      // Legacy requests that predate the matchedVolunteers field are shown to all volunteers as a fallback.
       const pendingFiltered = pendingDocs.filter(r =>
         !r.matchedVolunteers || r.matchedVolunteers.some(m => m.volunteerId === user.uid)
       );
@@ -211,7 +219,8 @@ export default function VolunteerDashboard() {
   async function acceptTask(req) {
     try {
       if (req.status === "pending_acceptance") {
-        // Auto-matched request – accept directly into inprogress
+        // AI already matched & "assigned" this volunteer; accepting moves directly to inprogress
+        // (the 'assigned' step is implicit — the assignment happened at request creation)
         await updateDoc(doc(db, "requests", req.id), {
           status: "inprogress",
           assignedVolunteerId: user.uid,

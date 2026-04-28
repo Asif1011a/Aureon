@@ -188,13 +188,22 @@ export async function classifyRequest(text, base64Image = null) {
     ? `An image has been provided. Carefully examine it for visual cues: injuries, damage, environmental hazards, people in distress, animals, fire, flooding, or any other emergency indicators. Describe what you observe and classify accordingly.`
     : "";
 
+  let incidentLog;
+  if (hasText) {
+    incidentLog = text;
+  } else if (hasImage) {
+    incidentLog = "User provided a photo — analyze it visually to determine the emergency type and severity.";
+  } else {
+    incidentLog = "Unspecified incident.";
+  }
+
   const prompt = `You are the core intelligence engine for the Aureon Community Support dispatch system.
 Analyze the following user distress request${hasImage ? " and the attached image" : ""} to generate an operational Incident Report.
 Reply ONLY with valid, minified JSON.
 
 ${imageInstruction}
 
-Incident Log: "${hasText ? text : hasImage ? "User provided a photo — analyze it visually to determine the emergency type and severity." : "Unspecified incident."}"
+Incident Log: "${incidentLog}"
 
 JSON Schema Required:
 {

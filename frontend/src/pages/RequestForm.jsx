@@ -184,6 +184,8 @@ export default function RequestForm() {
         urgency: aiResult.urgency,
       };
       
+      // Get top 5 matches so that if the #1 volunteer declines, the next best candidates
+      // are already recorded in matchedVolunteers and can be shown in their dashboards too
       const topMatches = getTopMatches(volunteers, requestData, 5);
       const topVol = topMatches.length > 0 ? topMatches[0].volunteer : null;
 
