@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { db } from "../firebase";
-import { collection, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp, getDocs, where } from "firebase/firestore";
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from "react-leaflet";
+import { collection, onSnapshot, query, orderBy, doc, updateDoc, serverTimestamp, where } from "firebase/firestore";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import "leaflet.heat";
-import { generateMatchingSuggestion } from "../utils/gemini";
+import { getTopMatches } from "../utils/aiMatching";
 import toast from "react-hot-toast";
 
 // Fix leaflet default icon
@@ -72,8 +73,8 @@ export default function AdminDashboard() {
   const [volunteers, setVolunteers] = useState([]);
   const [tab, setTab] = useState("overview");
   const [selectedReq, setSelectedReq] = useState(null);
+  const [matchResults, setMatchResults] = useState([]);
   const [matching, setMatching] = useState(false);
-  const [matchResult, setMatchResult] = useState(null);
   const [filterUrgency, setFilterUrgency] = useState("all");
 
   useEffect(() => {
@@ -98,21 +99,19 @@ export default function AdminDashboard() {
     emergency: requests.filter(r => r.urgency === "EMERGENCY").length,
     completed: requests.filter(r => r.status === "completed").length,
     availableVols: volunteers.filter(v => v.isAvailable).length,
+    totalVols: volunteers.length,
   };
 
-  const filtered = requests.filter(r => {
-    if (filterUrgency !== "all" && r.urgency !== filterUrgency) return false;
-    return true;
-  });
+  const filtered = requests.filter(r => filterUrgency === "all" || r.urgency === filterUrgency);
 
   async function handleAIMatch(req) {
     setSelectedReq(req);
-    setMatchResult(null);
+    setMatchResults([]);
     setMatching(true);
     try {
-      const availableVols = volunteers.filter(v => v.isAvailable);
-      const result = await generateMatchingSuggestion(req, availableVols);
-      setMatchResult(result);
+      // Use the local AI matching engine
+      const topMatches = getTopMatches(volunteers, req, 5);
+      setMatchResults(topMatches);
     } catch (err) {
       toast.error("Matching failed");
     } finally {
@@ -121,7 +120,7 @@ export default function AdminDashboard() {
   }
 
   async function assignVolunteer(req, volunteerId) {
-    const vol = volunteers.find(v => v.id === volunteerId);
+    const vol = volunteers.find(v => v.id === volunteerId || v.uid === volunteerId);
     if (!vol) return;
     try {
       await updateDoc(doc(db, "requests", req.id), {
@@ -131,227 +130,393 @@ export default function AdminDashboard() {
         assignedVolunteerPhone: vol.phone || "",
         updatedAt: serverTimestamp(),
       });
-      toast.success(`Assigned to ${vol.name}! Case updated.`);
+      toast.success(`Assigned to ${vol.name}!`);
       setSelectedReq(null);
-      setMatchResult(null);
+      setMatchResults([]);
     } catch (err) {
       toast.error("Assignment failed");
     }
   }
 
   const mapRequests = requests.filter(r => r.location?.lat && r.location?.lng);
-  const heatPoints = mapRequests.map(r => [
-    r.location.lat,
-    r.location.lng,
-    urgencyIntensity[r.urgency] || 0.5
-  ]);
+  const heatPoints = mapRequests.map(r => [r.location.lat, r.location.lng, urgencyIntensity[r.urgency] || 0.5]);
+
+  const scoreColor = (s) => s >= 80 ? "var(--success)" : s >= 60 ? "var(--warning)" : "var(--danger)";
 
   return (
     <div className="page">
       <div className="container" style={{ maxWidth: "1200px" }}>
-        
-        <div style={{ marginBottom: "28px" }}>
-          <h1 style={{ fontSize: "2rem", fontWeight: "800", color: "var(--text)" }}>Operations Command Center</h1>
-          <p style={{ color: "var(--text-muted)", marginTop: "4px" }}>
-            Aureon Real-Time Telemetry & Dispatch
+
+        {/* ── Header ── */}
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4 }}
+          style={{ marginBottom: "28px" }}
+        >
+          <span className="section-badge" style={{ marginBottom: "8px" }}>⚡ Command Center</span>
+          <h1 style={{ fontSize: "2rem", fontWeight: "800", letterSpacing: "-0.04em" }}>Operations Dashboard</h1>
+          <p style={{ color: "var(--text-muted)", marginTop: "4px", fontSize: "0.95rem" }}>
+            Real-Time Telemetry &amp; AI Dispatch System
           </p>
+        </motion.div>
+
+        {/* ── Stats Grid ── */}
+        <div className="stats-grid" style={{ gridTemplateColumns: "repeat(5, 1fr)" }}>
+          {[
+            { value: stats.total,        label: "Total Incidents",  icon: "📋", delay: 0,    danger: false },
+            { value: stats.emergency,    label: "🚨 Critical",      icon: "🔴", delay: 0.05, danger: stats.emergency > 0 },
+            { value: stats.pending,      label: "Pending Action",   icon: "⏳", delay: 0.1,  danger: false },
+            { value: stats.availableVols,label: "Available Vols",   icon: "🙋", delay: 0.15, danger: false },
+            { value: stats.total ? Math.round((stats.completed / stats.total) * 100) : 0, label: "Resolution %", icon: "📈", delay: 0.2, danger: false },
+          ].map(s => (
+            <motion.div
+              key={s.label}
+              className="stat-card"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: s.delay }}
+              style={s.danger ? { borderColor: "rgba(239,68,68,0.3)" } : {}}
+            >
+              <div className="stat-icon" style={{ background: s.danger ? "var(--danger-bg)" : "var(--primary-light)", color: s.danger ? "var(--danger)" : "var(--primary)" }}>
+                {s.icon}
+              </div>
+              <div className="stat-value" style={s.danger ? { color: "var(--danger)" } : {}}>{s.value}</div>
+              <div className="stat-label">{s.label}</div>
+            </motion.div>
+          ))}
         </div>
 
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-value">{stats.total}</div>
-            <div className="stat-label">Total Incidents</div>
-          </div>
-          <div className="stat-card" style={{ borderColor: stats.emergency > 0 ? "var(--danger)" : "var(--border)" }}>
-            <div className="stat-value" style={{ color: stats.emergency > 0 ? "var(--danger)" : "var(--primary)" }}>
-              {stats.emergency}
-            </div>
-            <div className="stat-label">🚨 Critical Priority</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value">{stats.pending}</div>
-            <div className="stat-label">Pending Action</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-value">{stats.total ? Math.round((stats.completed / stats.total) * 100) : 0}%</div>
-            <div className="stat-label">Resolution Rate</div>
-          </div>
-        </div>
-
+        {/* ── Tabs ── */}
         <div className="tabs">
-          <button className={`tab ${tab === "map" ? "active" : ""}`} onClick={() => setTab("map")}>🔥 Heatmap Visualization</button>
-          <button className={`tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>📋 Incident Logs</button>
-          <button className={`tab ${tab === "volunteers" ? "active" : ""}`} onClick={() => setTab("volunteers")}>🙋 Active Roster ({stats.availableVols})</button>
+          <button className={`tab ${tab === "overview" ? "active" : ""}`} onClick={() => setTab("overview")}>
+            📋 Incident Logs
+          </button>
+          <button className={`tab ${tab === "map" ? "active" : ""}`} onClick={() => setTab("map")}>
+            🔥 Crisis Heatmap
+          </button>
+          <button className={`tab ${tab === "volunteers" ? "active" : ""}`} onClick={() => setTab("volunteers")}>
+            🙋 Active Roster ({stats.availableVols}/{stats.totalVols})
+          </button>
         </div>
 
-        {tab === "overview" && (
-          <div>
-            <div style={{ marginBottom: "20px" }}>
-              <select className="form-select" style={{ maxWidth: "200px" }} value={filterUrgency} onChange={e => setFilterUrgency(e.target.value)}>
-                <option value="all">All Priorities</option>
-                <option value="EMERGENCY">🚨 Critical Phase</option>
-                <option value="HIGH">🔴 High Priority</option>
-                <option value="MEDIUM">🟡 Standard</option>
-                <option value="LOW">🟢 Low Priority</option>
-              </select>
-            </div>
-
-            {filtered.length === 0 ? (
-              <div className="empty-state">
-                <div className="empty-state-icon">📭</div>
-                <h3>No operational incidents</h3>
-              </div>
-            ) : filtered.map(req => (
-              <div key={req.id} className="request-card">
-                <div className="request-card-header">
-                  <div className="request-card-title">{req.summary}</div>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <span className={`badge badge-${req.urgency?.toLowerCase()}`}>{req.urgency}</span>
-                    <span className={`badge badge-${req.status}`}>{req.status.toUpperCase()}</span>
-                  </div>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
-                  <div style={{ background: "var(--bg)", padding: "16px", borderRadius: "8px" }}>
-                    <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontWeight: "600", textTransform: "uppercase", marginBottom: "8px" }}>Telemetry Details</div>
-                    <p>👤 {req.userName}</p>
-                    <p>📍 {req.area}</p>
-                    {req.userPhone && <p>📞 {req.userPhone}</p>}
-                  </div>
-                  <div style={{ background: "var(--bg)", padding: "16px", borderRadius: "8px" }}>
-                    <div style={{ fontSize: "0.85rem", color: "var(--text-muted)", fontWeight: "600", textTransform: "uppercase", marginBottom: "8px" }}>System Inference</div>
-                    <p style={{ fontSize: "0.9rem", color: "var(--text)" }}>{req.severityExplanation}</p>
-                    <p style={{ fontSize: "0.9rem", marginTop: "8px", fontWeight: "600", color: "var(--primary-dark)" }}>Resource Parameters: {req.requiredSkills?.join(", ") || "General Personnel"}</p>
-                  </div>
-                </div>
-
-                <div className="request-card-actions">
-                  {req.status === "pending" && (
-                    <button className="btn btn-primary" onClick={() => handleAIMatch(req)} disabled={matching}>
-                      {matching ? "Analyzing Resources..." : "⚡ Execute Smart Routing"}
-                    </button>
-                  )}
-                  {req.assignedVolunteerName && (
-                    <span style={{ fontSize: "0.95rem", fontWeight: "600", color: "var(--text)", padding: "10px 0" }}>
-                      ✓ Vector confirmed to Node: {req.assignedVolunteerName}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {(selectedReq || matching) && (
-          <div style={{
-            position: "fixed", top: "0", left: "0", right: "0", bottom: "0",
-            background: "rgba(0,0,0,0.6)", zIndex: 1000, backdropFilter: "blur(4px)",
-            display: "flex", alignItems: "center", justifyContent: "center"
-          }} className="animate-fade-in">
-            <div style={{
-              background: "var(--bg-card)", padding: "30px", borderRadius: "var(--radius)",
-              width: "90%", maxWidth: "550px", boxShadow: "0 20px 40px rgba(0,0,0,0.15)"
-            }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
-                <h3 style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--primary-dark)" }}>System Dispatch Vectoring</h3>
-                <button onClick={() => { setSelectedReq(null); setMatchResult(null); }} style={{ background: "none", border: "none", fontSize: "1.5rem", cursor: "pointer", color: "var(--text-muted)" }}>×</button>
+        {/* ── Incident Logs ── */}
+        <AnimatePresence mode="wait">
+          {tab === "overview" && (
+            <motion.div
+              key="overview"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25 }}
+            >
+              <div style={{ marginBottom: "20px", display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                <select
+                  className="form-select"
+                  style={{ maxWidth: "220px" }}
+                  value={filterUrgency}
+                  onChange={e => setFilterUrgency(e.target.value)}
+                >
+                  <option value="all">All Priorities</option>
+                  <option value="EMERGENCY">🚨 Critical / Emergency</option>
+                  <option value="HIGH">🔴 High Priority</option>
+                  <option value="MEDIUM">🟡 Standard</option>
+                  <option value="LOW">🟢 Low Priority</option>
+                </select>
+                <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>
+                  Showing {filtered.length} of {requests.length} incidents
+                </span>
               </div>
 
-              {matching ? (
-                <div style={{ textAlign: "center", padding: "40px" }}>
-                  <span className="spinner" style={{ width: "40px", height: "40px", borderColor: "var(--primary) transparent transparent transparent" }} />
-                  <p style={{ color: "var(--text-muted)", marginTop: "16px", fontWeight: "500" }}>Calculating optimal telemetry and node availability...</p>
+              {filtered.length === 0 ? (
+                <div className="empty-state">
+                  <span className="empty-state-icon">📭</span>
+                  <h3>No incidents found</h3>
                 </div>
-              ) : matchResult ? (
-                <div>
-                  <div style={{ background: "var(--primary-light)", padding: "16px", borderRadius: "8px", marginBottom: "20px", borderLeft: "4px solid var(--primary)" }}>
-                    <p style={{ color: "var(--primary-dark)", fontSize: "0.95rem", fontWeight: "600" }}>{matchResult.assignmentNote}</p>
-                  </div>
-                  
-                  {matchResult.topMatches?.map((m, i) => {
-                    const vol = volunteers.find(v => v.id === m.volunteerId || v.uid === m.volunteerId);
-                    if (!vol) return null;
-                    return (
-                      <div key={m.volunteerId} style={{
-                        border: "1px solid var(--border)", borderRadius: "8px", padding: "16px", marginBottom: "12px",
-                        display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--bg-card2)"
-                      }}>
-                        <div>
-                          <p style={{ fontWeight: "700", fontSize: "1.1rem" }}>{vol.name}</p>
-                          <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginTop: "4px" }}>{m.reason}</p>
+              ) : (
+                filtered.map((req, i) => (
+                  <motion.div
+                    key={req.id}
+                    className="request-card"
+                    initial={{ opacity: 0, x: -12 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.28, delay: i * 0.04 }}
+                  >
+                    <div className="request-card-header">
+                      <div className="request-card-title">{req.summary}</div>
+                      <div style={{ display: "flex", gap: "6px" }}>
+                        <span className={`badge badge-${req.urgency?.toLowerCase()}`}>{req.urgency}</span>
+                        <span className={`badge badge-${req.status}`}>{req.status.toUpperCase()}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px", marginBottom: "14px" }}>
+                      <div style={{ background: "var(--bg-hover)", padding: "14px", borderRadius: "8px" }}>
+                        <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "8px" }}>
+                          Telemetry Details
                         </div>
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{ fontSize: "1.3rem", fontWeight: "800", color: "var(--success)" }}>Score: {m.matchScore}</div>
-                          <button className="btn btn-primary btn-sm" style={{ marginTop: "8px" }} onClick={() => assignVolunteer(selectedReq, vol.id)}>
-                            Deploy Node
-                          </button>
+                        <p style={{ fontSize: "0.88rem" }}>👤 {req.userName}</p>
+                        <p style={{ fontSize: "0.88rem" }}>📍 {req.area}</p>
+                        {req.userPhone && <p style={{ fontSize: "0.88rem" }}>📞 {req.userPhone}</p>}
+                      </div>
+                      <div style={{ background: "var(--bg-hover)", padding: "14px", borderRadius: "8px" }}>
+                        <div style={{ fontSize: "0.7rem", color: "var(--text-muted)", fontWeight: "700", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "8px" }}>
+                          System Inference
+                        </div>
+                        <p style={{ fontSize: "0.88rem", color: "var(--text)" }}>{req.severityExplanation}</p>
+                        {req.requiredSkills?.length > 0 && (
+                          <p style={{ fontSize: "0.82rem", marginTop: "6px", fontWeight: "600", color: "var(--primary)" }}>
+                            Skills: {req.requiredSkills.join(", ")}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="request-card-actions">
+                      {req.status === "pending" && (
+                        <motion.button
+                          className="btn btn-primary"
+                          onClick={() => handleAIMatch(req)}
+                          disabled={matching}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          {matching && selectedReq?.id === req.id
+                            ? <><span className="spinner" /> Analyzing...</>
+                            : "⚡ AI Smart Match"}
+                        </motion.button>
+                      )}
+                      {req.assignedVolunteerName && (
+                        <span style={{ fontSize: "0.9rem", fontWeight: "600", color: "var(--success-dark)", display: "flex", alignItems: "center", gap: "6px" }}>
+                          ✓ Dispatched to {req.assignedVolunteerName}
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                ))
+              )}
+            </motion.div>
+          )}
+
+          {/* ── Heatmap ── */}
+          {tab === "map" && (
+            <motion.div
+              key="map"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25 }}
+            >
+              <div className="card" style={{ padding: "0", overflow: "hidden", border: "1.5px solid var(--border)" }}>
+                <div style={{
+                  padding: "14px 20px", background: "var(--bg-hover)",
+                  borderBottom: "1px solid var(--border)",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                }}>
+                  <span style={{ fontWeight: "700", display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ display: "inline-block", width: "10px", height: "10px", background: "var(--danger)", borderRadius: "50%" }} />
+                    Real-Time Crisis Heatmap
+                  </span>
+                  <span style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>Coimbatore Sector — {mapRequests.length} incidents</span>
+                </div>
+                <div style={{ height: "600px", width: "100%" }}>
+                  <MapContainer center={[11.0168, 76.9558]} zoom={12} style={{ height: "100%", width: "100%" }}>
+                    <TileLayer
+                      url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                      attribution="&copy; OpenStreetMap"
+                    />
+                    <HeatmapLayer points={heatPoints} />
+                    {mapRequests.map(req => (
+                      <Marker key={req.id} position={[req.location.lat, req.location.lng]} icon={urgencyIcon(req.urgency)}>
+                        <Popup>
+                          <div style={{ fontFamily: "Inter, sans-serif" }}>
+                            <strong style={{ fontSize: "0.9rem" }}>{req.summary}</strong>
+                            <p style={{ margin: "4px 0", color: "#64748b", fontSize: "0.8rem" }}>Status: {req.status}</p>
+                            <p style={{ margin: 0, fontWeight: "700", fontSize: "0.8rem", color: urgencyColors[req.urgency] }}>{req.urgency}</p>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    ))}
+                  </MapContainer>
+                </div>
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── Volunteer Roster ── */}
+          {tab === "volunteers" && (
+            <motion.div
+              key="volunteers"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25 }}
+            >
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "16px" }}>
+                {volunteers.map((vol, i) => (
+                  <motion.div
+                    key={vol.id}
+                    className="vol-card"
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3, delay: i * 0.05 }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+                      <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                        <div className="vol-avatar">{(vol.name || "V")[0].toUpperCase()}</div>
+                        <div>
+                          <h3 style={{ fontSize: "1rem", fontWeight: "700" }}>{vol.name}</h3>
+                          <p style={{ color: "var(--text-muted)", fontSize: "0.8rem", marginTop: "2px" }}>
+                            {vol.tasksCompleted ?? 0} missions · ⭐ {vol.rating ?? 5.0}
+                          </p>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        )}
+                      <span style={{
+                        padding: "3px 10px", borderRadius: "99px", fontSize: "0.7rem", fontWeight: "700",
+                        background: vol.isAvailable ? "var(--success-bg)" : "var(--bg-hover)",
+                        color: vol.isAvailable ? "var(--success-dark)" : "var(--text-muted)",
+                        border: `1px solid ${vol.isAvailable ? "var(--success-border)" : "var(--border)"}`,
+                        textTransform: "uppercase", letterSpacing: "0.04em",
+                      }}>
+                        {vol.isAvailable ? "✓ Ready" : "Busy"}
+                      </span>
+                    </div>
 
-        {tab === "map" && (
-          <div>
-            <div className="card" style={{ padding: "0", overflow: "hidden", border: "2px solid var(--border)" }}>
-              <div style={{ padding: "16px", background: "var(--bg-card2)", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between" }}>
-                <span style={{ fontWeight: "700", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ display: "inline-block", width: "12px", height: "12px", background: "red", borderRadius: "50%" }}></span> 
-                  Real-Time Crisis Heatmap
-                </span>
-                <span style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Coimbatore Sector</span>
-              </div>
-              <div style={{ height: "600px", width: "100%" }}>
-                <MapContainer center={[11.0168, 76.9558]} zoom={12} style={{ height: "100%", width: "100%" }}>
-                  <TileLayer
-                    url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-                    attribution="&copy; OpenStreetMap"
-                  />
-                  
-                  {/* Heatmap Layer */}
-                  <HeatmapLayer points={heatPoints} />
+                    <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", marginBottom: "10px" }}>
+                      {vol.skills?.slice(0, 4).map(s => (
+                        <span key={s} className="chip" style={{ fontSize: "0.72rem", padding: "2px 8px" }}>{s}</span>
+                      ))}
+                    </div>
 
-                  {/* Individual Markers beneath the heat blur */}
-                  {mapRequests.map(req => (
-                    <Marker key={req.id} position={[req.location.lat, req.location.lng]} icon={urgencyIcon(req.urgency)}>
-                      <Popup>
-                        <div style={{ fontFamily: "Inter, sans-serif" }}>
-                          <strong style={{ fontSize: "1rem" }}>{req.summary}</strong>
-                          <p style={{ margin: "4px 0", color: "#64748b" }}>Status: {req.status}</p>
-                          <p style={{ margin: 0, fontWeight: "600", color: urgencyColors[req.urgency] }}>{req.urgency}</p>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  ))}
-                </MapContainer>
+                    <p style={{ color: "var(--text-muted)", fontSize: "0.82rem" }}>📍 {vol.address || "Coimbatore"}</p>
+                    {vol.phone && <p style={{ color: "var(--text-muted)", fontSize: "0.82rem", marginTop: "4px" }}>📞 {vol.phone}</p>}
+                  </motion.div>
+                ))}
               </div>
-            </div>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-        {tab === "volunteers" && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "20px" }}>
-            {volunteers.map(vol => (
-              <div key={vol.id} className="card">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
-                  <h3 style={{ fontSize: "1.1rem", fontWeight: "700" }}>{vol.name}</h3>
-                  <span className={`badge ${vol.isAvailable ? "badge-success" : "badge-pending"}`}>
-                    {vol.isAvailable ? "Operational" : "Offline"}
-                  </span>
+        {/* ── AI Match Modal ── */}
+        <AnimatePresence>
+          {(selectedReq || matching) && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              style={{
+                position: "fixed", inset: 0,
+                background: "rgba(15,23,42,0.6)",
+                zIndex: 1000, backdropFilter: "blur(8px)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                padding: "20px",
+              }}
+              onClick={(e) => { if (e.target === e.currentTarget) { setSelectedReq(null); setMatchResults([]); } }}
+            >
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                transition={{ duration: 0.25 }}
+                style={{
+                  background: "var(--bg-card)", borderRadius: "var(--radius-xl)",
+                  width: "100%", maxWidth: "560px",
+                  boxShadow: "var(--shadow-xl)",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Modal Header */}
+                <div style={{
+                  background: "var(--grad-primary)", padding: "20px 24px",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                }}>
+                  <div>
+                    <h3 style={{ fontSize: "1.1rem", fontWeight: "800", color: "white" }}>🧠 AI Matching Engine</h3>
+                    <p style={{ color: "rgba(255,255,255,0.7)", fontSize: "0.82rem", marginTop: "2px" }}>
+                      {selectedReq?.summary?.slice(0, 60)}...
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setSelectedReq(null); setMatchResults([]); }}
+                    style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "white", width: "32px", height: "32px", borderRadius: "8px", cursor: "pointer", fontSize: "1rem", display: "flex", alignItems: "center", justifyContent: "center" }}
+                  >
+                    ×
+                  </button>
                 </div>
-                <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>📞 {vol.phone}</p>
-                <p style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>📍 {vol.address || "Coimbatore"}</p>
-                <div className="chip-list" style={{ marginTop: "16px" }}>
-                  {vol.skills?.map(s => <span key={s} className="chip">{s}</span>)}
+
+                <div style={{ padding: "24px" }}>
+                  {matching ? (
+                    <div style={{ textAlign: "center", padding: "40px" }}>
+                      <div style={{ width: "48px", height: "48px", borderRadius: "50%", border: "3px solid var(--primary-light)", borderTopColor: "var(--primary)", animation: "spin 0.7s linear infinite", margin: "0 auto 20px" }} />
+                      <p style={{ color: "var(--text-muted)", fontWeight: "500" }}>
+                        Analyzing volunteer profiles…
+                      </p>
+                    </div>
+                  ) : matchResults.length === 0 ? (
+                    <div className="empty-state" style={{ border: "none" }}>
+                      <span className="empty-state-icon">🙋</span>
+                      <h3>No volunteers available</h3>
+                      <p>All volunteers are currently busy.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <p style={{ fontSize: "0.85rem", color: "var(--text-muted)", marginBottom: "16px", fontWeight: "500" }}>
+                        Top {matchResults.length} matches ranked by AI composite score
+                      </p>
+                      {matchResults.map((m, i) => (
+                        <motion.div
+                          key={m.volunteerId}
+                          initial={{ opacity: 0, x: 12 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ duration: 0.25, delay: i * 0.07 }}
+                          style={{
+                            border: `1.5px solid ${i === 0 ? "rgba(99,102,241,0.3)" : "var(--border)"}`,
+                            borderRadius: "12px", padding: "16px",
+                            marginBottom: "10px",
+                            background: i === 0 ? "var(--primary-light)" : "var(--bg-hover)",
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                          }}
+                        >
+                          <div style={{ display: "flex", gap: "12px", alignItems: "center", flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              width: "40px", height: "40px", borderRadius: "50%",
+                              background: i === 0 ? "var(--grad-primary)" : "var(--bg-card2)",
+                              color: i === 0 ? "white" : "var(--text)",
+                              fontWeight: "700", fontSize: "1rem",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              flexShrink: 0,
+                              boxShadow: i === 0 ? "var(--shadow-primary)" : "none",
+                            }}>
+                              {i === 0 ? "🏆" : (m.volunteer.name || "V")[0]}
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <p style={{ fontWeight: "700", fontSize: "0.95rem" }}>{m.volunteer.name}</p>
+                              <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {m.reason}
+                              </p>
+                            </div>
+                          </div>
+                          <div style={{ textAlign: "right", flexShrink: 0, marginLeft: "12px" }}>
+                            <div style={{ fontSize: "1.4rem", fontWeight: "900", color: scoreColor(m.matchScore), letterSpacing: "-0.05em" }}>
+                              {m.matchScore}
+                            </div>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              style={{ marginTop: "6px" }}
+                              onClick={() => assignVolunteer(selectedReq, m.volunteerId)}
+                            >
+                              Deploy
+                            </button>
+                          </div>
+                        </motion.div>
+                      ))}
+                    </>
+                  )}
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
       </div>
     </div>
