@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { useApp } from "../context/AppContext";
 import toast from "react-hot-toast";
 
@@ -53,7 +54,7 @@ export default function Register() {
       toast.success("Account created! Welcome to Aureon AI 🎉");
       if (role === "admin") navigate("/admin");
       else if (role === "volunteer") navigate("/volunteer");
-      else navigate("/submit");
+      else navigate("/dashboard");
     } catch (err) {
       toast.error(err.message || "Registration failed");
     } finally {
@@ -61,51 +62,73 @@ export default function Register() {
     }
   }
 
+  const ROLES = [
+    { id: "user", icon: "🏙️", label: "Community Member", sub: "I need help" },
+    { id: "volunteer", icon: "🚀", label: "Volunteer", sub: "I want to help" },
+    { id: "admin", icon: "⚡", label: "Admin", sub: "Manage the system" },
+  ];
+
   return (
-    <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
-      <div style={{ width: "100%", maxWidth: "500px" }}>
+    <div className="page" style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", background: "var(--grad-hero)" }}>
+      <motion.div
+        style={{ width: "100%", maxWidth: "520px" }}
+        initial={{ opacity: 0, y: 24 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.45 }}
+      >
         <div style={{ textAlign: "center", marginBottom: "28px" }}>
-          <div style={{
-            width: "60px", height: "60px",
-            background: "linear-gradient(135deg, var(--primary), var(--secondary))",
-            borderRadius: "18px",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: "1.8rem", margin: "0 auto 16px"
-          }}>⚡</div>
-          <h1 style={{ fontSize: "1.8rem", fontWeight: "800" }}>Create Account</h1>
-          <p style={{ color: "var(--text-muted)", marginTop: "6px" }}>Join Aureon AI — {step === 1 ? "Who are you?" : "Fill your details"}</p>
+          <motion.div
+            style={{
+              width: "64px", height: "64px",
+              background: "var(--grad-primary)",
+              borderRadius: "18px",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "1.8rem", margin: "0 auto 16px",
+              boxShadow: "var(--shadow-primary)",
+            }}
+          >
+            ▲
+          </motion.div>
+          <h1 style={{ fontSize: "1.9rem", fontWeight: "800", letterSpacing: "-0.04em" }}>Create Account</h1>
+          <p style={{ color: "var(--text-muted)", marginTop: "6px" }}>
+            {step === 1 ? "Join Aureon AI — Who are you?" : "Fill your details"}
+          </p>
         </div>
 
-        <div className="card">
+        {/* Progress */}
+        <div style={{ display: "flex", gap: "8px", marginBottom: "24px" }}>
+          {[1, 2].map(s => (
+            <div
+              key={s}
+              style={{
+                flex: 1, height: "4px", borderRadius: "99px",
+                background: step >= s ? "var(--grad-primary)" : "var(--border)",
+                transition: "background 0.3s ease",
+              }}
+            />
+          ))}
+        </div>
+
+        <div className="card" style={{ boxShadow: "var(--shadow-lg)", borderColor: "rgba(99,102,241,0.1)" }}>
           {step === 1 ? (
             <div>
-              <p style={{ fontWeight: "600", marginBottom: "16px", color: "var(--text-muted)", fontSize: "0.9rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>I am a...</p>
+              <p style={{ fontWeight: "600", marginBottom: "16px", color: "var(--text-muted)", fontSize: "0.82rem", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                I am a…
+              </p>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "24px" }}>
-                {[
-                  { id: "user", icon: "👤", label: "Community Member", sub: "Need help" },
-                  { id: "volunteer", icon: "🙋", label: "Volunteer", sub: "Want to help" },
-                  { id: "admin", icon: "🛡️", label: "Admin", sub: "Manage system" }
-                ].map(r => (
-                  <button
+                {ROLES.map(r => (
+                  <motion.button
                     key={r.id}
                     id={`role-${r.id}`}
+                    className={`role-card ${role === r.id ? "selected" : ""}`}
                     onClick={() => setRole(r.id)}
-                    style={{
-                      padding: "20px 12px",
-                      borderRadius: "14px",
-                      border: `2px solid ${role === r.id ? "var(--primary)" : "var(--border)"}`,
-                      background: role === r.id ? "rgba(79,70,229,0.12)" : "rgba(255,255,255,0.03)",
-                      cursor: "pointer",
-                      textAlign: "center",
-                      transition: "all 0.2s",
-                      color: "var(--text)",
-                      fontFamily: "inherit",
-                    }}
+                    whileHover={{ y: -2 }}
+                    whileTap={{ scale: 0.97 }}
                   >
                     <div style={{ fontSize: "1.8rem", marginBottom: "8px" }}>{r.icon}</div>
-                    <div style={{ fontWeight: "700", fontSize: "0.85rem" }}>{r.label}</div>
+                    <div style={{ fontWeight: "700", fontSize: "0.85rem", color: "var(--text)" }}>{r.label}</div>
                     <div style={{ color: "var(--text-muted)", fontSize: "0.75rem", marginTop: "4px" }}>{r.sub}</div>
-                  </button>
+                  </motion.button>
                 ))}
               </div>
               <button
@@ -137,8 +160,8 @@ export default function Register() {
                 <input id="reg-password" className="form-input" type="password" placeholder="Min 6 characters" value={form.password} onChange={e => setField("password", e.target.value)} required />
               </div>
               <div className="form-group">
-                <label className="form-label">Address / Area (Coimbatore)</label>
-                <input id="reg-address" className="form-input" placeholder="e.g. RS Puram, Gandhipuram..." value={form.address} onChange={e => setField("address", e.target.value)} />
+                <label className="form-label">Area (Coimbatore)</label>
+                <input id="reg-address" className="form-input" placeholder="e.g. RS Puram, Gandhipuram…" value={form.address} onChange={e => setField("address", e.target.value)} />
               </div>
 
               {role === "volunteer" && (
@@ -174,7 +197,7 @@ export default function Register() {
               <div style={{ display: "flex", gap: "12px", marginTop: "8px" }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setStep(1)}>← Back</button>
                 <button id="register-submit" type="submit" className="btn btn-primary" style={{ flex: 1 }} disabled={loading}>
-                  {loading ? <><span className="spinner" /> Creating...</> : "Create Account 🎉"}
+                  {loading ? <><span className="spinner" /> Creating…</> : "Create Account 🎉"}
                 </button>
               </div>
             </form>
@@ -183,9 +206,10 @@ export default function Register() {
 
         <p style={{ textAlign: "center", marginTop: "20px", color: "var(--text-muted)", fontSize: "0.9rem" }}>
           Already have an account?{" "}
-          <Link to="/login" style={{ color: "var(--primary-light)", fontWeight: "600" }}>Sign in</Link>
+          <Link to="/login" style={{ color: "var(--primary)", fontWeight: "600" }}>Sign in →</Link>
         </p>
-      </div>
+      </motion.div>
     </div>
   );
 }
+
