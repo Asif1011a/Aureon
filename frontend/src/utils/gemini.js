@@ -6,19 +6,32 @@ const genAI = new GoogleGenerativeAI(API_KEY || "dummy");
 // Ordered by free quota availability
 const MODELS = [
   "gemini-1.5-flash",
-  "gemini-1.5-flash-8b",
-  "gemini-1.0-pro",
+  "gemini-1.5-pro",
 ];
 
-async function tryGenerate(prompt) {
+async function tryGenerate(promptText, base64Image = null) {
   let lastError;
   for (const modelName of MODELS) {
     try {
       const model = genAI.getGenerativeModel({ model: modelName });
-      const result = await model.generateContent(prompt);
+      let result;
+      if (base64Image) {
+        const base64Data = base64Image.split(",")[1] || base64Image;
+        const mimeType = base64Image.match(/data:(.*?);base64/)?.[1] || "image/jpeg";
+        result = await model.generateContent([
+          promptText,
+          { inlineData: { data: base64Data, mimeType } }
+        ]);
+      } else {
+        result = await model.generateContent(promptText);
+      }
       return result.response.text().trim();
     } catch (err) {
       console.warn(`Model ${modelName} failed. Reason:`, err?.message);
+      // Short-circuit if we hit quota limits to avoid unnecessary cycles
+      if (err?.message?.includes("429") || err?.message?.includes("quota")) {
+        throw new Error("QUOTA_EXCEEDED");
+      }
       lastError = err;
     }
   }
@@ -167,12 +180,12 @@ function getSimulatedResult(text) {
 }
 
 
-export async function classifyRequest(text) {
+export async function classifyRequest(text, base64Image = null) {
   const prompt = `You are the core intelligence engine for the Aureon Community Support dispatch system.
-Analyze the following user distress request and generate an operational Incident Report.
+Analyze the following user distress request and/or attached image to generate an operational Incident Report.
 Reply ONLY with valid, minified JSON.
 
-Incident Log: "${text}"
+Incident Log: "${text || "User provided visual evidence."}"
 
 JSON Schema Required:
 {
@@ -196,13 +209,13 @@ Constraints:
 - requiredSupplies: Direct string array of physical materials needed.`;
 
   try {
-    const responseText = await tryGenerate(prompt);
+    const responseText = await tryGenerate(prompt, base64Image);
     const parsed = extractJSON(responseText);
 
     return {
       urgency: parsed.urgency || "MEDIUM",
       category: parsed.category || "General Support",
-      summary: parsed.summary || text.slice(0, 80),
+      summary: parsed.summary || text.slice(0, 80) || "Visual Incident Reported",
       actionPlan: Array.isArray(parsed.actionPlan) && parsed.actionPlan.length > 0 ? parsed.actionPlan : ["Coordinate with user on-site.", "Assess the primary concern upon arrival.", "Provide standard operational support."],
       requiredSupplies: Array.isArray(parsed.requiredSupplies) ? parsed.requiredSupplies : ["Standard toolkit"],
       requiredSkills: Array.isArray(parsed.requiredSkills) ? parsed.requiredSkills : ["General Assistance"],
@@ -210,7 +223,8 @@ Constraints:
       severityExplanation: parsed.severityExplanation || "Incident registered under standard priority protocols.",
     };
   } catch (err) {
-    // If API fails (Quota limit 0), route to the Advanced Demo Engine
+    console.error("Gemini Dispatch Failed:", err.message);
+    // If API fails or Quota reached, route to the Advanced Demo Engine
     return getSimulatedResult(text);
   }
 }

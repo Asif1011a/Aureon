@@ -6,6 +6,82 @@ import { useApp } from "../context/AppContext";
 import { calculateMatchScore } from "../utils/aiMatching";
 import toast from "react-hot-toast";
 
+import { MapContainer, TileLayer, Marker, Polyline, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+// Fix Leaflet icons
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+});
+
+function FitBounds({ bounds }) {
+  const map = useMap();
+  useEffect(() => {
+    if (bounds) map.fitBounds(bounds, { padding: [40, 40] });
+  }, [bounds, map]);
+  return null;
+}
+
+function MissionRouteMap({ volunteerLocation, incidentLocation }) {
+  const [route, setRoute] = useState(null);
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    if (!volunteerLocation || !incidentLocation) return;
+    async function fetchRoute() {
+      const p1 = `${volunteerLocation.lng},${volunteerLocation.lat}`;
+      const p2 = `${incidentLocation.lng},${incidentLocation.lat}`;
+      try {
+        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${p1};${p2}?overview=full&geometries=geojson`);
+        const data = await res.json();
+        if (data.code === "Ok" && data.routes && data.routes.length > 0) {
+           const r = data.routes[0];
+           const latLngs = r.geometry.coordinates.map(coord => [coord[1], coord[0]]);
+           setRoute(latLngs);
+           setStats({
+             distance: (r.distance / 1000).toFixed(1) + " km", 
+             duration: Math.ceil(r.duration / 60) + " min" 
+           });
+        }
+      } catch (err) { }
+    }
+    fetchRoute();
+  }, [volunteerLocation, incidentLocation]);
+
+  if (!route) return <div style={{height: "140px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-hover)", borderRadius: "12px", border: "1px solid var(--border)", marginBottom: "16px"}}><span className="spinner"></span></div>;
+
+  const bounds = [
+    [volunteerLocation.lat, volunteerLocation.lng],
+    [incidentLocation.lat, incidentLocation.lng]
+  ];
+
+  return (
+    <div style={{ position: "relative", height: "300px", width: "100%", borderRadius: "12px", overflow: "hidden", border: "1px solid rgba(99,102,241,0.2)", marginBottom: "16px" }}>
+      <div style={{ position: "absolute", top: "12px", right: "12px", zIndex: 999, background: "var(--bg-card)", padding: "8px 12px", borderRadius: "8px", boxShadow: "var(--shadow-lg)", border: "1px solid var(--primary)", display: "flex", gap: "16px" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <span style={{ fontSize: "0.7rem", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>Distance</span>
+          <span style={{ fontWeight: "800", color: "var(--primary)" }}>{stats.distance}</span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+          <span style={{ fontSize: "0.7rem", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>ETA</span>
+          <span style={{ fontWeight: "800", color: "var(--success)" }}>{stats.duration}</span>
+        </div>
+      </div>
+      <MapContainer bounds={bounds} style={{ height: "100%", width: "100%", zIndex: 0 }}>
+         <TileLayer url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}" maxZoom={20} attribution="Google Maps" />
+         <Marker position={[volunteerLocation.lat, volunteerLocation.lng]} />
+         <Marker position={[incidentLocation.lat, incidentLocation.lng]} />
+         <Polyline positions={route} color="var(--primary)" weight={5} opacity={0.8} />
+         <FitBounds bounds={bounds} />
+      </MapContainer>
+    </div>
+  );
+}
+
 const urgencyStyle = {
   EMERGENCY: { bg: "#fef2f2", color: "#991b1b", border: "#fca5a5" },
   HIGH:      { bg: "#fffbeb", color: "#92400e", border: "#fde68a" },
@@ -41,32 +117,40 @@ export default function VolunteerDashboard() {
   const [isAvailable, setIsAvailable] = useState(userData?.isAvailable ?? true);
 
   useEffect(() => {
+    if (!user) return;
     const q = query(
       collection(db, "requests"),
-      where("status", "==", "pending"),
-      orderBy("createdAt", "desc")
+      where("status", "==", "pending")
     );
     const unsub = onSnapshot(q, snap => {
       const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      const skills = userData?.skills || [];
-      const filtered = skills.length === 0
-        ? all
-        : all.filter(r => !r.requiredSkills?.length || r.requiredSkills.some(s => skills.includes(s)));
+      // Sort manually to avoid index requirement
+      all.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      // Show requests where this volunteer is in the AI-matched list
+      const matched = all.filter(r =>
+        r.matchedVolunteers?.some(m => m.volunteerId === user.uid)
+      );
+      // Fallback: if no matched volunteers field, show all (legacy requests)
+      const filtered = matched.length > 0 || all.some(r => r.matchedVolunteers)
+        ? matched
+        : all;
       setRequests(filtered);
       setLoading(false);
     });
     return unsub;
-  }, [userData]);
+  }, [user, userData]);
 
   useEffect(() => {
     if (!user) return;
     const q = query(
       collection(db, "requests"),
-      where("assignedVolunteerId", "==", user.uid),
-      orderBy("createdAt", "desc")
+      where("assignedVolunteerId", "==", user.uid)
     );
     const unsub = onSnapshot(q, snap => {
-      setMyTasks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort manually to avoid index requirement
+      items.sort((a,b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      setMyTasks(items);
     });
     return unsub;
   }, [user]);
@@ -391,7 +475,22 @@ export default function VolunteerDashboard() {
                       </ul>
                     </div>
 
+                    {/* DYNAMIC ROUTINE ENGINE OVERLAY */}
+                    {req.status !== "completed" && req.location && userData?.location && (
+                      <MissionRouteMap volunteerLocation={userData.location} incidentLocation={req.location} />
+                    )}
+
                     <div className="request-card-actions">
+                      {req.status === "pending_acceptance" && (
+                        <motion.button
+                          className="btn btn-primary"
+                          onClick={() => updateStatus(req, "inprogress")}
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          📍 Accept Auto-Matched Mission
+                        </motion.button>
+                      )}
                       {req.status === "assigned" && (
                         <motion.button
                           className="btn btn-primary"

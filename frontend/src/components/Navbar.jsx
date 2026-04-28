@@ -1,132 +1,47 @@
-import React, { useState, useEffect } from "react";
-import { Link, useNavigate, useLocation } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import React from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
-
-const ROLE_CONFIG = {
-  user: {
-    label: "Community Member",
-    badge: "🏙️",
-    badgeClass: "user",
-    links: [
-      { to: "/dashboard", label: "My Dashboard" },
-      { to: "/submit", label: "New Request" },
-      { to: "/status", label: "Track Status" },
-    ],
-  },
-  volunteer: {
-    label: "Responder",
-    badge: "🚀",
-    badgeClass: "volunteer",
-    links: [
-      { to: "/volunteer", label: "Responder Hub" },
-    ],
-  },
-  admin: {
-    label: "Admin",
-    badge: "⚡",
-    badgeClass: "admin",
-    links: [
-      { to: "/admin", label: "Command Center" },
-    ],
-  },
-};
 
 export default function Navbar() {
   const { user, userRole, logout, lang, toggleLang } = useApp();
   const navigate = useNavigate();
-  const location = useLocation();
-  const [scrolled, setScrolled] = useState(false);
-
-  useEffect(() => {
-    const handler = () => setScrolled(window.scrollY > 10);
-    window.addEventListener("scroll", handler, { passive: true });
-    return () => window.removeEventListener("scroll", handler);
-  }, []);
 
   const handleLogout = async () => {
     await logout();
     navigate("/");
   };
 
-  const config = ROLE_CONFIG[userRole] || null;
+  const navText = {
+    EN: { citizen: "Citizen Portal", responder: "Volunteer Portal", signOut: "Sign Out", cta: "Join Now" },
+    TA: { citizen: "குடிமக்கள் தளம்", responder: "தொண்டர் மையம்", signOut: "வெளியேறு", cta: "தொடங்குக" }
+  };
+
+  const t = navText[lang] || navText.EN;
 
   return (
-    <nav
-      className="navbar"
-      style={{
-        boxShadow: scrolled ? "var(--shadow-md)" : "none",
-        transition: "box-shadow 0.3s ease",
-      }}
-    >
-      {/* Logo */}
+    <nav className="navbar glass-panel">
       <Link to="/" className="navbar-logo">
-        <div className="logo-icon">▲</div>
-        <span>
-          Aureon{" "}
-          <span style={{ fontWeight: 500, opacity: 0.45, fontSize: "0.9rem" }}>AI</span>
-        </span>
+        <div className="logo-icon neon-glow">▲</div>
+        <span className="gradient-text" style={{fontWeight: 800}}>Aureon <span style={{ opacity: 0.5, fontWeight: 500 }}>AI</span></span>
       </Link>
-
-      {/* Links */}
+      
       <div className="navbar-links">
-        {/* Language toggle */}
-        <button
-          onClick={toggleLang}
-          className="icon-btn"
-          title={lang === "EN" ? "Switch to Tamil" : "Switch to English"}
-          style={{ marginRight: "4px", fontSize: "0.85rem", width: "auto", padding: "6px 12px", gap: "4px" }}
-        >
-          🌐 {lang === "EN" ? "தமிழ்" : "EN"}
+        <button onClick={toggleLang} style={{ fontWeight: 700, marginRight: '16px', color: 'var(--primary)', background: 'transparent', border: 'none', cursor: 'pointer' }}>
+          {lang === "EN" ? "🌐 தமிழ்" : "🌐 English"}
         </button>
 
         {!user ? (
           <>
-            <Link
-              to="/login"
-              style={{ color: location.pathname === "/login" ? "var(--primary)" : undefined }}
-            >
-              Sign In
-            </Link>
-            <Link to="/register" className="btn btn-primary btn-nav-primary">
-              Get Started →
-            </Link>
+            <Link to="/login" style={{color: 'var(--text-muted)', fontWeight: 600}}>Sign In</Link>
+            <Link to="/register" className="btn btn-primary">{t.cta}</Link>
           </>
         ) : (
           <>
-            {/* Role badge */}
-            {config && (
-              <span className={`navbar-role-badge ${config.badgeClass}`}>
-                {config.badge} {config.label}
-              </span>
-            )}
-
-            {/* Role-specific nav links */}
-            {config?.links.map(link => (
-              <Link
-                key={link.to}
-                to={link.to}
-                style={{
-                  color: location.pathname === link.to ? "var(--primary)" : undefined,
-                  fontWeight: location.pathname === link.to ? "600" : undefined,
-                }}
-              >
-                {link.label}
-              </Link>
-            ))}
-
-            {/* Sign out */}
-            <button
-              onClick={handleLogout}
-              style={{
-                marginLeft: "8px",
-                borderLeft: "1px solid var(--border)",
-                paddingLeft: "16px",
-                borderRadius: 0,
-                color: "var(--text-muted)",
-              }}
-            >
-              Sign Out
+            {userRole === "user" && <Link to="/status" style={{fontWeight: 600}}>{t.citizen}</Link>}
+            {userRole === "volunteer" && <Link to="/volunteer" style={{fontWeight: 600}}>{t.responder}</Link>}
+            {userRole === "admin" && <Link to="/admin" style={{fontWeight: 600}}>Admin Dashboard</Link>}
+            <button onClick={handleLogout} className="btn-logout" style={{ marginLeft: "12px", borderLeft: "1px solid var(--border)", paddingLeft: "20px", borderRadius: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer' }}>
+              {t.signOut}
             </button>
           </>
         )}

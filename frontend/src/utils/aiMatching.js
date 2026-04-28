@@ -67,18 +67,38 @@ function experienceScore(volunteer) {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// 4. Location Proximity  (0–15 pts)
+// 4. Location Proximity (0-15 pts) via Haversine Distance
 // ──────────────────────────────────────────────────────────────────────────
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371; // Earth radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat/2) * Math.sin(dLat/2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLon/2) * Math.sin(dLon/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c; // Distance in km
+}
+
 function locationScore(volunteer, request) {
+  // If exact coordinates are available, calculate Haversine distance
+  if (volunteer.location?.lat && request.location?.lat) {
+    const dist = haversineDistance(
+      volunteer.location.lat, volunteer.location.lng,
+      request.location.lat, request.location.lng
+    );
+    // 0-2km = 15pts, drops to 0pts at 15km
+    const score = Math.max(0, 15 - Math.floor(dist));
+    return score;
+  }
+
+  // Fallback to string matching
   const volArea = (volunteer.address ?? "").toLowerCase();
   const reqArea = (request.area ?? "").toLowerCase();
-
-  if (!volArea || !reqArea) return 7; // unknown → midpoint
-
-  // Exact match
+  if (!volArea || !reqArea) return 7;
   if (volArea.includes(reqArea) || reqArea.includes(volArea)) return 15;
-
-  // Both in Coimbatore → partial credit
+  
   const cbeKeywords = ["coimbatore", "cbe", "kovai"];
   const bothCbe = cbeKeywords.some(k => volArea.includes(k)) ||
     cbeKeywords.some(k => reqArea.includes(k));
