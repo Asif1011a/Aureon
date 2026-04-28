@@ -5,14 +5,15 @@ import { useApp } from "../context/AppContext";
 import { Link } from "react-router-dom";
 
 const STATUS_STEPS = [
-  { key: "pending", label: "Request Submitted", icon: "📋", desc: "Your case is logged." },
-  { key: "assigned", label: "Volunteer Assigned", icon: "🙋", desc: "A responder is reviewing the AI Action Plan." },
+  { key: "pending", label: "Request Submitted", icon: "📋", desc: "Your case is logged and AI is matching a volunteer." },
+  { key: "pending_acceptance", label: "Volunteer Notified", icon: "🎯", desc: "AI matched a volunteer — awaiting their confirmation." },
+  { key: "assigned", label: "Volunteer Assigned", icon: "🙋", desc: "A responder has confirmed and is reviewing the AI Action Plan." },
   { key: "inprogress", label: "Help On The Way", icon: "🚗", desc: "Responder is executing the plan." },
   { key: "completed", label: "Completed", icon: "✅", desc: "Case resolved." },
 ];
 
 function getStepIndex(status) {
-  const map = { pending: 0, assigned: 1, inprogress: 2, completed: 3 };
+  const map = { pending: 0, pending_acceptance: 1, assigned: 2, inprogress: 3, completed: 4 };
   return map[status] ?? 0;
 }
 

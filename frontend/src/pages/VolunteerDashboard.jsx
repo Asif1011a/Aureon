@@ -29,30 +29,51 @@ function FitBounds({ bounds }) {
 function MissionRouteMap({ volunteerLocation, incidentLocation }) {
   const [route, setRoute] = useState(null);
   const [stats, setStats] = useState(null);
+  const [routeError, setRouteError] = useState(false);
 
   useEffect(() => {
     if (!volunteerLocation || !incidentLocation) return;
+    setRoute(null);
+    setStats(null);
+    setRouteError(false);
+
     async function fetchRoute() {
       const p1 = `${volunteerLocation.lng},${volunteerLocation.lat}`;
       const p2 = `${incidentLocation.lng},${incidentLocation.lat}`;
       try {
-        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${p1};${p2}?overview=full&geometries=geojson`);
+        const res = await fetch(
+          `https://router.project-osrm.org/route/v1/driving/${p1};${p2}?overview=full&geometries=geojson`,
+          { signal: AbortSignal.timeout(8000) }
+        );
         const data = await res.json();
         if (data.code === "Ok" && data.routes && data.routes.length > 0) {
-           const r = data.routes[0];
-           const latLngs = r.geometry.coordinates.map(coord => [coord[1], coord[0]]);
-           setRoute(latLngs);
-           setStats({
-             distance: (r.distance / 1000).toFixed(1) + " km", 
-             duration: Math.ceil(r.duration / 60) + " min" 
-           });
+          const r = data.routes[0];
+          const latLngs = r.geometry.coordinates.map(coord => [coord[1], coord[0]]);
+          setRoute(latLngs);
+          setStats({
+            distance: (r.distance / 1000).toFixed(1) + " km",
+            duration: Math.ceil(r.duration / 60) + " min",
+          });
+        } else {
+          setRouteError(true);
         }
-      } catch (err) { }
+      } catch (err) {
+        // Fallback: straight-line route between the two points
+        setRoute([
+          [volunteerLocation.lat, volunteerLocation.lng],
+          [incidentLocation.lat, incidentLocation.lng],
+        ]);
+        const dLat = incidentLocation.lat - volunteerLocation.lat;
+        const dLon = incidentLocation.lng - volunteerLocation.lng;
+        const dist = Math.sqrt(dLat * dLat + dLon * dLon) * 111;
+        setStats({ distance: dist.toFixed(1) + " km", duration: Math.ceil(dist * 3) + " min (est.)" });
+        setRouteError(true);
+      }
     }
     fetchRoute();
   }, [volunteerLocation, incidentLocation]);
 
-  if (!route) return <div style={{height: "140px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-hover)", borderRadius: "12px", border: "1px solid var(--border)", marginBottom: "16px"}}><span className="spinner"></span></div>;
+  if (!route) return <div style={{height: "140px", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-hover)", borderRadius: "12px", border: "1px solid var(--border)", marginBottom: "16px", flexDirection: "column", gap: "8px"}}><span className="spinner"></span><span style={{fontSize: "0.8rem", color: "var(--text-muted)"}}>Fetching OSRM route…</span></div>;
 
   const bounds = [
     [volunteerLocation.lat, volunteerLocation.lng],
@@ -61,21 +82,30 @@ function MissionRouteMap({ volunteerLocation, incidentLocation }) {
 
   return (
     <div style={{ position: "relative", height: "300px", width: "100%", borderRadius: "12px", overflow: "hidden", border: "1px solid rgba(99,102,241,0.2)", marginBottom: "16px" }}>
+      {routeError && (
+        <div style={{ position: "absolute", top: "8px", left: "12px", zIndex: 999, background: "rgba(245,158,11,0.9)", color: "white", fontSize: "0.7rem", fontWeight: "700", padding: "3px 8px", borderRadius: "6px" }}>
+          ⚠ Straight-line estimate (OSRM unavailable)
+        </div>
+      )}
       <div style={{ position: "absolute", top: "12px", right: "12px", zIndex: 999, background: "var(--bg-card)", padding: "8px 12px", borderRadius: "8px", boxShadow: "var(--shadow-lg)", border: "1px solid var(--primary)", display: "flex", gap: "16px" }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
           <span style={{ fontSize: "0.7rem", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>Distance</span>
-          <span style={{ fontWeight: "800", color: "var(--primary)" }}>{stats.distance}</span>
+          <span style={{ fontWeight: "800", color: "var(--primary)" }}>{stats?.distance ?? "…"}</span>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
           <span style={{ fontSize: "0.7rem", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>ETA</span>
-          <span style={{ fontWeight: "800", color: "var(--success)" }}>{stats.duration}</span>
+          <span style={{ fontWeight: "800", color: "var(--success)" }}>{stats?.duration ?? "…"}</span>
         </div>
       </div>
       <MapContainer bounds={bounds} style={{ height: "100%", width: "100%", zIndex: 0 }}>
-         <TileLayer url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}" maxZoom={20} attribution="Google Maps" />
+         <TileLayer
+           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+           maxZoom={19}
+           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
+         />
          <Marker position={[volunteerLocation.lat, volunteerLocation.lng]} />
          <Marker position={[incidentLocation.lat, incidentLocation.lng]} />
-         <Polyline positions={route} color="var(--primary)" weight={5} opacity={0.8} />
+         <Polyline positions={route} color={routeError ? "#f59e0b" : "var(--primary)"} weight={5} opacity={0.85} dashArray={routeError ? "8 6" : null} />
          <FitBounds bounds={bounds} />
       </MapContainer>
     </div>
@@ -118,27 +148,50 @@ export default function VolunteerDashboard() {
 
   useEffect(() => {
     if (!user) return;
-    const q = query(
+    // Query 1: general pending requests (unassigned, show to all matching volunteers)
+    const q1 = query(
       collection(db, "requests"),
       where("status", "==", "pending")
     );
-    const unsub = onSnapshot(q, snap => {
-      const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      // Sort manually to avoid index requirement
-      all.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-      // Show requests where this volunteer is in the AI-matched list
-      const matched = all.filter(r =>
-        r.matchedVolunteers?.some(m => m.volunteerId === user.uid)
+    // Query 2: AI-auto-matched requests specifically directed at this volunteer
+    const q2 = query(
+      collection(db, "requests"),
+      where("status", "==", "pending_acceptance"),
+      where("assignedVolunteerId", "==", user.uid)
+    );
+
+    let pendingDocs = [];
+    let acceptanceDocs = [];
+
+    function merge() {
+      const combined = [...acceptanceDocs, ...pendingDocs];
+      combined.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      // For plain pending requests, only show those matched to this volunteer (if matchedVolunteers field exists)
+      const pendingFiltered = pendingDocs.filter(r =>
+        !r.matchedVolunteers || r.matchedVolunteers.some(m => m.volunteerId === user.uid)
       );
-      // Fallback: if no matched volunteers field, show all (legacy requests)
-      const filtered = matched.length > 0 || all.some(r => r.matchedVolunteers)
-        ? matched
-        : all;
-      setRequests(filtered);
+      const result = [...acceptanceDocs, ...pendingFiltered];
+      result.sort((a, b) => {
+        // AI-matched (pending_acceptance) always first
+        if (a.status === "pending_acceptance" && b.status !== "pending_acceptance") return -1;
+        if (b.status === "pending_acceptance" && a.status !== "pending_acceptance") return 1;
+        return (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0);
+      });
+      setRequests(result);
       setLoading(false);
+    }
+
+    const unsub1 = onSnapshot(q1, snap => {
+      pendingDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      merge();
     });
-    return unsub;
-  }, [user, userData]);
+    const unsub2 = onSnapshot(q2, snap => {
+      acceptanceDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      merge();
+    });
+
+    return () => { unsub1(); unsub2(); };
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -157,17 +210,44 @@ export default function VolunteerDashboard() {
 
   async function acceptTask(req) {
     try {
-      await updateDoc(doc(db, "requests", req.id), {
-        status: "assigned",
-        assignedVolunteerId: user.uid,
-        assignedVolunteerName: userData?.name || "Volunteer",
-        assignedVolunteerPhone: userData?.phone || "",
-        updatedAt: serverTimestamp(),
-      });
+      if (req.status === "pending_acceptance") {
+        // Auto-matched request – accept directly into inprogress
+        await updateDoc(doc(db, "requests", req.id), {
+          status: "inprogress",
+          assignedVolunteerId: user.uid,
+          assignedVolunteerName: userData?.name || "Volunteer",
+          assignedVolunteerPhone: userData?.phone || "",
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        // General pending request
+        await updateDoc(doc(db, "requests", req.id), {
+          status: "assigned",
+          assignedVolunteerId: user.uid,
+          assignedVolunteerName: userData?.name || "Volunteer",
+          assignedVolunteerPhone: userData?.phone || "",
+          updatedAt: serverTimestamp(),
+        });
+      }
       toast.success("Task accepted! Review the AI Action Plan.");
       setTab("my-tasks");
     } catch (err) {
       toast.error("Failed to accept task");
+    }
+  }
+
+  async function declineTask(req) {
+    try {
+      await updateDoc(doc(db, "requests", req.id), {
+        status: "pending",
+        assignedVolunteerId: null,
+        assignedVolunteerName: null,
+        assignedVolunteerPhone: null,
+        updatedAt: serverTimestamp(),
+      });
+      toast.success("Request declined – it will be re-assigned to another volunteer.");
+    } catch (err) {
+      toast.error("Failed to decline task");
     }
   }
 
@@ -197,7 +277,9 @@ export default function VolunteerDashboard() {
     (a, b) => (urgencyOrder[a.urgency] ?? 9) - (urgencyOrder[b.urgency] ?? 9)
   );
 
-  // Enrich requests with personal match score
+  const pendingAcceptanceCount = requests.filter(r => r.status === "pending_acceptance").length;
+
+  // Compute enriched requests
   const enrichedRequests = sortedRequests.map(req => {
     const { total: matchScore } = calculateMatchScore(
       { ...userData, id: user?.uid, isAvailable },
@@ -300,6 +382,15 @@ export default function VolunteerDashboard() {
         <div className="tabs">
           <button className={`tab ${tab === "available" ? "active" : ""}`} onClick={() => setTab("available")}>
             🔔 Open Requests ({sortedRequests.length})
+            {pendingAcceptanceCount > 0 && (
+              <span style={{
+                marginLeft: "6px", background: "var(--danger)", color: "white",
+                borderRadius: "99px", fontSize: "0.65rem", fontWeight: "800",
+                padding: "2px 7px", display: "inline-block", animation: "pulse-dot 2s infinite",
+              }}>
+                {pendingAcceptanceCount} NEW
+              </span>
+            )}
           </button>
           <button className={`tab ${tab === "my-tasks" ? "active" : ""}`} onClick={() => setTab("my-tasks")}>
             📂 My Cases ({myTasks.length})
@@ -329,6 +420,7 @@ export default function VolunteerDashboard() {
               ) : (
                 enrichedRequests.map((req, i) => {
                   const ust = urgencyStyle[req.urgency] || urgencyStyle.MEDIUM;
+                  const isAiMatched = req.status === "pending_acceptance";
                   return (
                     <motion.div
                       key={req.id}
@@ -336,7 +428,22 @@ export default function VolunteerDashboard() {
                       initial={{ opacity: 0, x: -12 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ duration: 0.3, delay: i * 0.06 }}
+                      style={isAiMatched ? { borderColor: "var(--primary)", borderWidth: "2px" } : {}}
                     >
+                      {/* AI Matched Banner */}
+                      {isAiMatched && (
+                        <div style={{
+                          background: "var(--grad-primary)", color: "white",
+                          fontSize: "0.72rem", fontWeight: "700", padding: "6px 14px",
+                          margin: "-16px -16px 14px -16px",
+                          display: "flex", alignItems: "center", gap: "8px",
+                          borderRadius: "12px 12px 0 0",
+                        }}>
+                          <span style={{ animation: "pulse-dot 2s infinite", width: "8px", height: "8px", borderRadius: "50%", background: "rgba(255,255,255,0.9)", display: "inline-block" }} />
+                          🎯 AI Auto-Matched — You are the best fit for this mission
+                        </div>
+                      )}
+
                       <div className="request-card-header">
                         <div className="request-card-title">{req.summary}</div>
                         <div style={{ display: "flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
@@ -385,8 +492,19 @@ export default function VolunteerDashboard() {
                           whileHover={{ scale: 1.02 }}
                           whileTap={{ scale: 0.98 }}
                         >
-                          Accept Mission
+                          {isAiMatched ? "✅ Accept Matched Mission" : "Accept Mission"}
                         </motion.button>
+                        {isAiMatched && (
+                          <motion.button
+                            className="btn btn-secondary"
+                            onClick={() => declineTask(req)}
+                            whileHover={{ scale: 1.02 }}
+                            whileTap={{ scale: 0.98 }}
+                            style={{ color: "var(--danger)", borderColor: "var(--danger)" }}
+                          >
+                            Decline
+                          </motion.button>
+                        )}
                       </div>
                     </motion.div>
                   );
