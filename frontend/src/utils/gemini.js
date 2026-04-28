@@ -181,11 +181,29 @@ function getSimulatedResult(text) {
 
 
 export async function classifyRequest(text, base64Image = null) {
+  const hasImage = !!base64Image;
+  const hasText = !!(text && text.trim());
+
+  const imageInstruction = hasImage
+    ? `An image has been provided. Carefully examine it for visual cues: injuries, damage, environmental hazards, people in distress, animals, fire, flooding, or any other emergency indicators. Describe what you observe and classify accordingly.`
+    : "";
+
+  let incidentLog;
+  if (hasText) {
+    incidentLog = text;
+  } else if (hasImage) {
+    incidentLog = "User provided a photo — analyze it visually to determine the emergency type and severity.";
+  } else {
+    incidentLog = "Unspecified incident.";
+  }
+
   const prompt = `You are the core intelligence engine for the Aureon Community Support dispatch system.
-Analyze the following user distress request and/or attached image to generate an operational Incident Report.
+Analyze the following user distress request${hasImage ? " and the attached image" : ""} to generate an operational Incident Report.
 Reply ONLY with valid, minified JSON.
 
-Incident Log: "${text || "User provided visual evidence."}"
+${imageInstruction}
+
+Incident Log: "${incidentLog}"
 
 JSON Schema Required:
 {
@@ -206,7 +224,8 @@ JSON Schema Required:
 Constraints:
 - urgency: EMERGENCY | HIGH | MEDIUM | LOW
 - actionPlan: Maximum 3 concise, highly professional operational directives for the volunteer.
-- requiredSupplies: Direct string array of physical materials needed.`;
+- requiredSupplies: Direct string array of physical materials needed.
+- If an image is provided, prioritize visual analysis over text when they conflict.`;
 
   try {
     const responseText = await tryGenerate(prompt, base64Image);
@@ -215,7 +234,7 @@ Constraints:
     return {
       urgency: parsed.urgency || "MEDIUM",
       category: parsed.category || "General Support",
-      summary: parsed.summary || text.slice(0, 80) || "Visual Incident Reported",
+      summary: parsed.summary || (hasText ? text.slice(0, 80) : "Visual Incident Reported"),
       actionPlan: Array.isArray(parsed.actionPlan) && parsed.actionPlan.length > 0 ? parsed.actionPlan : ["Coordinate with user on-site.", "Assess the primary concern upon arrival.", "Provide standard operational support."],
       requiredSupplies: Array.isArray(parsed.requiredSupplies) ? parsed.requiredSupplies : ["Standard toolkit"],
       requiredSkills: Array.isArray(parsed.requiredSkills) ? parsed.requiredSkills : ["General Assistance"],
@@ -225,6 +244,23 @@ Constraints:
   } catch (err) {
     console.error("Gemini Dispatch Failed:", err.message);
     // If API fails or Quota reached, route to the Advanced Demo Engine
+    // For image-only submissions use a visual-evidence fallback
+    if (!hasText && hasImage) {
+      return {
+        urgency: "HIGH",
+        category: "Visual Incident",
+        summary: "Distress situation identified from uploaded image evidence.",
+        actionPlan: [
+          "1. Proceed to the reported coordinates and visually assess the situation.",
+          "2. Contact the reporter to gather additional verbal context.",
+          "3. Provide immediate on-site support and log findings.",
+        ],
+        requiredSupplies: ["Basic Rapid Response Kit", "Communication Device"],
+        requiredSkills: ["Crisis Management", "First Responder"],
+        estimatedTime: "Immediate Dispatch (1–2 Hours)",
+        severityExplanation: "Image evidence submitted. Situational risk level set to HIGH pending on-site assessment.",
+      };
+    }
     return getSimulatedResult(text);
   }
 }

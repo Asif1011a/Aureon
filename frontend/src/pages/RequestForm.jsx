@@ -184,8 +184,17 @@ export default function RequestForm() {
         urgency: aiResult.urgency,
       };
       
-      const topMatches = getTopMatches(volunteers, requestData, 3);
+      // Get top 5 matches so that if the #1 volunteer declines, the next best candidates
+      // are already recorded in matchedVolunteers and can be shown in their dashboards too
+      const topMatches = getTopMatches(volunteers, requestData, 5);
       const topVol = topMatches.length > 0 ? topMatches[0].volunteer : null;
+
+      // Store top matched volunteer IDs so each volunteer's dashboard can filter requests for them
+      const matchedVolunteers = topMatches.map(m => ({
+        volunteerId: m.volunteerId,
+        matchScore: m.matchScore,
+        reason: m.reason,
+      }));
       
       await addDoc(collection(db, "requests"), {
         userId: user.uid,
@@ -206,6 +215,7 @@ export default function RequestForm() {
         assignedVolunteerId: topVol ? (topVol.id || topVol.uid) : null,
         assignedVolunteerName: topVol ? topVol.name : null,
         assignedVolunteerPhone: topVol ? topVol.phone : null,
+        matchedVolunteers,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
@@ -302,7 +312,9 @@ export default function RequestForm() {
             <div style={{ height: "300px", width: "100%", background: "var(--bg-hover)", borderRadius: "0 0 12px 12px", zIndex: 0 }}>
               <MapContainer center={position} zoom={13} style={{ height: "100%", width: "100%", borderRadius: "0 0 12px 12px" }}>
                 <TileLayer
-                  url="https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}" maxZoom={20} attribution="Google Maps"
+                  url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+                  maxZoom={19}
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/">CARTO</a>'
                 />
                 <RecenterMap position={position} />
                 <LocationMarker position={position} setPosition={pos => {
@@ -367,7 +379,13 @@ export default function RequestForm() {
             disabled={classifying || (!text.trim() && !image)}
             style={{ marginBottom: "24px" }}
           >
-            {classifying ? <><span className="spinner" /> Synthesizing Visual/Text Data...</> : "🚀 Execute Multimodal Analysis"}
+            {classifying
+              ? <><span className="spinner" /> {image && !text.trim() ? "Analyzing Image with AI…" : "Synthesizing Visual/Text Data…"}</>
+              : image && !text.trim()
+                ? "🔍 Analyze Image Evidence"
+                : image
+                  ? "🚀 Execute Multimodal Analysis"
+                  : "🚀 Analyze with AI"}
           </button>
 
           {/* SMART AI REPORT VIEW */}
